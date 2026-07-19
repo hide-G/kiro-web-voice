@@ -12,7 +12,7 @@ export const OUTPUT_MODES = Object.freeze({
 });
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  version: 1,
+  version: 2,
   lang: "ja-JP",
   outputMode: OUTPUT_MODES.MANUAL_READ,
   autoSubmit: false,
@@ -23,6 +23,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
   skipCodeBlocks: true,
   // A11y: honour system reduce-motion by default.
   respectReducedMotion: true,
+  // Privacy mask (v0.2.0) — off by default. Individual sub-toggles apply
+  // only when the master `privacyMaskEnabled` is true.
+  privacyMaskEnabled: false,
+  privacyMaskEmails: true,
+  privacyMaskRecent: true,
 });
 
 export const MSG = Object.freeze({

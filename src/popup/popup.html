@@ -99,6 +99,47 @@
         </div>
       </section>
 
+      <section class="kwv-card" aria-labelledby="lbl-privacy">
+        <div class="kwv-card__title" id="lbl-privacy">プライバシーマスク</div>
+
+        <div class="kwv-row">
+          <div class="kwv-row__label">
+            <span>マスクを有効にする</span>
+            <span class="kwv-row__hint">半透明ぼかし・ホバーで一時解除</span>
+          </div>
+          <label class="kwv-toggle">
+            <input type="checkbox" id="privacyMaskEnabled" />
+            <span class="kwv-toggle__track" aria-hidden="true"><span class="kwv-toggle__thumb"></span></span>
+          </label>
+        </div>
+
+        <div class="kwv-row" data-depends-on="privacyMaskEnabled">
+          <div class="kwv-row__label">
+            <span>メールアドレス</span>
+            <span class="kwv-row__hint">画面上の @ を含むテキストを隠す</span>
+          </div>
+          <label class="kwv-toggle">
+            <input type="checkbox" id="privacyMaskEmails" />
+            <span class="kwv-toggle__track" aria-hidden="true"><span class="kwv-toggle__thumb"></span></span>
+          </label>
+        </div>
+
+        <div class="kwv-row" data-depends-on="privacyMaskEnabled">
+          <div class="kwv-row__label">
+            <span>Recent（最近）セクション</span>
+            <span class="kwv-row__hint">サイドバーの履歴一覧を隠す</span>
+          </div>
+          <label class="kwv-toggle">
+            <input type="checkbox" id="privacyMaskRecent" />
+            <span class="kwv-toggle__track" aria-hidden="true"><span class="kwv-toggle__thumb"></span></span>
+          </label>
+        </div>
+
+        <p class="kwv-card__hint">
+          セキュリティ機能ではありません。DOM 上のテキストはそのまま残ります。デモや配信時の視覚的な目隠しとしてご利用ください。
+        </p>
+      </section>
+
       <footer class="kwv-popup__footer">
         <span>Alt+K で開始／停止・Alt+Shift+K で最新回答を読み上げ</span>
       </footer>

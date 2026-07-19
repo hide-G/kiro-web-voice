@@ -43,6 +43,9 @@
     ttsVoiceURI: null,
     skipCodeBlocks: true,
     respectReducedMotion: true,
+    privacyMaskEnabled: false,
+    privacyMaskEmails: true,
+    privacyMaskRecent: true,
   };
   const MSG = {
     GET_SETTINGS: "kwv:get-settings",
@@ -116,8 +119,17 @@
     if (area !== "sync") return;
     const entry = changes["kwv.settings.v1"];
     if (entry?.newValue) {
+      const prev = state.settings;
       state.settings = { ...DEFAULT_SETTINGS, ...entry.newValue };
       log("settings updated", state.settings);
+      // Re-run privacy reconciliation only if any related knob moved.
+      const changed =
+        prev.privacyMaskEnabled !== state.settings.privacyMaskEnabled ||
+        prev.privacyMaskEmails !== state.settings.privacyMaskEmails ||
+        prev.privacyMaskRecent !== state.settings.privacyMaskRecent;
+      if (changed && typeof reconcilePrivacyMask === "function") {
+        reconcilePrivacyMask();
+      }
     }
   });
 
@@ -951,6 +963,186 @@
   }
 
   // ------------------------------------------------------------------
+  // Privacy mask
+  //
+  // Hides sensitive information behind a blur that clears on hover.
+  // Off by default (privacyMaskEnabled=false). Aimed at demos, screen
+  // sharing and public screenshots — not a security guarantee, since the
+  // masked text still exists in the DOM.
+  // ------------------------------------------------------------------
+
+  const MASK_ATTR = "data-kwv-mask";
+  const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+  const RECENT_LABEL_RE = /^\s*(recent|recents|recently|最近|履歴|履歴一覧)\s*$/i;
+
+  let _privacyScanTimer = null;
+
+  function shouldMaskEmails() {
+    return !!(state.settings.privacyMaskEnabled && state.settings.privacyMaskEmails);
+  }
+  function shouldMaskRecent() {
+    return !!(state.settings.privacyMaskEnabled && state.settings.privacyMaskRecent);
+  }
+
+  function schedulePrivacyScan(delay = 250) {
+    if (!state.settings.privacyMaskEnabled) return;
+    clearTimeout(_privacyScanTimer);
+    _privacyScanTimer = setTimeout(() => {
+      if (shouldMaskEmails()) maskEmailsInDocument();
+      if (shouldMaskRecent()) maskRecentSections();
+    }, delay);
+  }
+
+  function isMaskableTextNode(node) {
+    if (!node || node.nodeType !== 3) return false;
+    const parent = node.parentNode;
+    if (!parent || parent.nodeType !== 1) return false;
+    if (parent.closest && parent.closest("#kwv-host")) return false;
+    const tag = parent.tagName;
+    if (
+      tag === "SCRIPT" ||
+      tag === "STYLE" ||
+      tag === "TEXTAREA" ||
+      tag === "INPUT" ||
+      tag === "META" ||
+      tag === "TITLE" ||
+      tag === "NOSCRIPT"
+    ) {
+      return false;
+    }
+    if (parent.isContentEditable) return false;
+    if (parent.closest && parent.closest(`[${MASK_ATTR}="email"]`)) return false;
+    return true;
+  }
+
+  function maskEmailsInDocument() {
+    if (!shouldMaskEmails() || !document.body) return;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (!isMaskableTextNode(node)) return NodeFilter.FILTER_REJECT;
+        EMAIL_RE.lastIndex = 0;
+        return EMAIL_RE.test(node.nodeValue || "")
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT;
+      },
+    });
+    const targets = [];
+    let n;
+    while ((n = walker.nextNode())) targets.push(n);
+    for (const t of targets) wrapEmailsInTextNode(t);
+  }
+
+  function wrapEmailsInTextNode(textNode) {
+    const text = textNode.nodeValue;
+    if (!text) return;
+    const parent = textNode.parentNode;
+    if (!parent) return;
+    const re = new RegExp(EMAIL_RE.source, "g");
+    const parts = [];
+    let last = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) parts.push({ type: "text", value: text.slice(last, m.index) });
+      parts.push({ type: "email", value: m[0] });
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) parts.push({ type: "text", value: text.slice(last) });
+    // No matches (guard against the walker's regex state).
+    if (parts.length === 0 || (parts.length === 1 && parts[0].type === "text")) return;
+
+    const frag = document.createDocumentFragment();
+    for (const p of parts) {
+      if (p.type === "text") {
+        frag.appendChild(document.createTextNode(p.value));
+      } else {
+        const span = document.createElement("span");
+        span.setAttribute(MASK_ATTR, "email");
+        span.className = "kwv-mask kwv-mask-email";
+        span.setAttribute("title", "ホバーで表示 / hover to reveal");
+        span.textContent = p.value;
+        frag.appendChild(span);
+      }
+    }
+    parent.replaceChild(frag, textNode);
+  }
+
+  function maskRecentSections() {
+    if (!shouldMaskRecent() || !document.body) return;
+    // Match short text nodes whose whole content is a "Recent" label.
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const labels = [];
+    let n;
+    while ((n = walker.nextNode())) {
+      const val = n.nodeValue;
+      if (!val || val.length > 30) continue;
+      if (RECENT_LABEL_RE.test(val)) labels.push(n);
+    }
+    for (const label of labels) {
+      const el = label.parentElement;
+      if (!el || (el.closest && el.closest("#kwv-host"))) continue;
+      const list = findListContainerNear(el);
+      if (list) applySectionMask(list);
+    }
+  }
+
+  function findListContainerNear(labelEl) {
+    // Prefer a following sibling that is or contains a list.
+    let sib = labelEl.nextElementSibling;
+    while (sib) {
+      if (sib.tagName === "UL" || sib.tagName === "OL" || sib.getAttribute("role") === "list") {
+        return sib;
+      }
+      const inner = sib.querySelector && sib.querySelector("ul, ol, [role=list]");
+      if (inner) return inner;
+      sib = sib.nextElementSibling;
+    }
+    // Walk a few ancestors and try their list descendants.
+    let up = labelEl.parentElement;
+    for (let i = 0; i < 4 && up; i++) {
+      const list = up.querySelector && up.querySelector("ul, ol, [role=list]");
+      if (list && !labelEl.contains(list) && !list.contains(labelEl)) return list;
+      up = up.parentElement;
+    }
+    return null;
+  }
+
+  function applySectionMask(el) {
+    if (!el || el.getAttribute(MASK_ATTR) === "section") return;
+    if (el.closest && el.closest("#kwv-host")) return;
+    el.setAttribute(MASK_ATTR, "section");
+    el.classList.add("kwv-mask", "kwv-mask-section");
+  }
+
+  function removeMaskedEmails() {
+    document.querySelectorAll(`span[${MASK_ATTR}="email"]`).forEach((span) => {
+      const parent = span.parentNode;
+      if (!parent) return;
+      parent.insertBefore(document.createTextNode(span.textContent || ""), span);
+      parent.removeChild(span);
+      parent.normalize && parent.normalize();
+    });
+  }
+
+  function removeMaskedSections() {
+    document.querySelectorAll(`[${MASK_ATTR}="section"]`).forEach((el) => {
+      el.removeAttribute(MASK_ATTR);
+      el.classList.remove("kwv-mask", "kwv-mask-section");
+    });
+  }
+
+  function reconcilePrivacyMask() {
+    // Called on boot and whenever any privacy setting changes.
+    if (!state.settings.privacyMaskEnabled) {
+      removeMaskedEmails();
+      removeMaskedSections();
+      return;
+    }
+    if (!shouldMaskEmails()) removeMaskedEmails();
+    if (!shouldMaskRecent()) removeMaskedSections();
+    schedulePrivacyScan(0);
+  }
+
+  // ------------------------------------------------------------------
   // Event wiring
   // ------------------------------------------------------------------
 
@@ -973,6 +1165,9 @@
 
   const observer = new MutationObserver(() => {
     ensureReadChips();
+    // Debounced privacy re-scan for dynamically loaded content
+    // (new messages, sidebar updates, etc.). No-op when masking is off.
+    schedulePrivacyScan(300);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
@@ -984,6 +1179,11 @@
     await loadSettings();
     mountUi();
     ensureReadChips();
-    log("Kiro Web Voice ready", { lang: state.settings.lang, mode: state.settings.outputMode });
+    reconcilePrivacyMask();
+    log("Kiro Web Voice ready", {
+      lang: state.settings.lang,
+      mode: state.settings.outputMode,
+      privacyMask: state.settings.privacyMaskEnabled,
+    });
   })();
 })();

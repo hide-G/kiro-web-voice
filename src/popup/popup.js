@@ -12,6 +12,9 @@ const els = {
   rateValue: document.getElementById("rateValue"),
   skipCode: document.getElementById("skipCode"),
   testTts: document.getElementById("testTts"),
+  privacyMaskEnabled: document.getElementById("privacyMaskEnabled"),
+  privacyMaskEmails: document.getElementById("privacyMaskEmails"),
+  privacyMaskRecent: document.getElementById("privacyMaskRecent"),
 };
 
 async function getSettings() {
@@ -27,6 +30,16 @@ function renderMode(mode) {
     const on = btn.dataset.mode === mode;
     btn.setAttribute("aria-checked", on ? "true" : "false");
   });
+}
+
+function syncPrivacyDependants(masterOn) {
+  document
+    .querySelectorAll('[data-depends-on="privacyMaskEnabled"]')
+    .forEach((row) => {
+      row.dataset.inactive = masterOn ? "false" : "true";
+      const input = row.querySelector("input");
+      if (input) input.disabled = !masterOn;
+    });
 }
 
 function populateVoices() {
@@ -50,6 +63,10 @@ function init() {
     els.rate.value = String(s.ttsRate ?? 1.0);
     els.rateValue.textContent = Number(els.rate.value).toFixed(2);
     els.skipCode.checked = !!s.skipCodeBlocks;
+    els.privacyMaskEnabled.checked = !!s.privacyMaskEnabled;
+    els.privacyMaskEmails.checked = !!s.privacyMaskEmails;
+    els.privacyMaskRecent.checked = !!s.privacyMaskRecent;
+    syncPrivacyDependants(s.privacyMaskEnabled);
     populateVoices();
     if (s.ttsVoiceURI) els.voice.value = s.ttsVoiceURI;
   });
@@ -73,6 +90,18 @@ function init() {
   els.rate.addEventListener("change", () => setSettings({ ttsRate: Number(els.rate.value) }));
 
   els.voice.addEventListener("change", () => setSettings({ ttsVoiceURI: els.voice.value || null }));
+
+  els.privacyMaskEnabled.addEventListener("change", async () => {
+    const on = els.privacyMaskEnabled.checked;
+    syncPrivacyDependants(on);
+    await setSettings({ privacyMaskEnabled: on });
+  });
+  els.privacyMaskEmails.addEventListener("change", () =>
+    setSettings({ privacyMaskEmails: els.privacyMaskEmails.checked })
+  );
+  els.privacyMaskRecent.addEventListener("change", () =>
+    setSettings({ privacyMaskRecent: els.privacyMaskRecent.checked })
+  );
 
   els.testTts.addEventListener("click", () => {
     if (!("speechSynthesis" in window)) return;
