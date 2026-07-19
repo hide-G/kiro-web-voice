@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Kiro Web Voice (PoC)",
   "short_name": "Kiro Voice",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Push-to-talk voice input and optional read-aloud for Kiro Web. Proof-of-concept.",
   "author": "hide-G",
   "minimum_chrome_version": "116",
