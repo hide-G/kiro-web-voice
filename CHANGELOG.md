@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-19
+
+Visual redesign and dedicated read-aloud action based on live feedback:
+the previous look read as an Apple product, and Kiro's replies were not
+reliably read out.
+
+### Changed
+- **Icon.** Replaced the iOS-style blue/indigo gradient rounded-square
+  with a neutral dark-charcoal circle and a plain white microphone.
+  No gradient, no highlight, no drop shadow. A muted green dot at the
+  top-right indicates recording capability (dropped at 16 px). Aim: reads
+  as a utility, not a system app.
+- **FAB dimensions.** Reduced height from 52 px to 34 px, tightened
+  padding, dropped the label from 15 px to 12 px. The pill still has the
+  same shape language but no longer dominates the corner.
+- **Sheet dimensions.** Width `420 → 340`, padding `16 → 12`, radius
+  `22 → 16`, transcript min-height `84 → 60` and font `15 → 13.5`.
+
+### Added
+- **Second FAB "読む" (Read).** Sits next to "話す" in a shared dock.
+  Clicking it (or `Alt+Shift+K`) speaks whatever is currently readable,
+  and clicking again stops. Green pulse indicator while speaking, matched
+  in style to the red pulse used for listening.
+- **Cascading read-target resolution.**
+  1. **Text selection.** If the user has selected any text on the page,
+     that is what gets read. Selection inside the extension's own Shadow
+     DOM is ignored.
+  2. **Known semantic patterns.** `[role="log"] [role="article"]`,
+     `[data-role="assistant"]`, `[data-message-role="assistant"]`,
+     `[data-message-author-role="assistant"]` (ChatGPT-style),
+     `main article`, `main [role="article"]`.
+  3. **Class-name hints** — `[class*="assistant"]`, `[class*="response"]`,
+     `[class*="message"]`, each with exclusions to avoid matching the
+     composer / user messages / buttons.
+  4. **Layout heuristic.** The biggest visible text block above the
+     composer, closest to it, is treated as the newest reply. Wrapper
+     containers whose descendants cover most of their own text are
+     rejected to avoid reading the whole chat log at once.
+- Read-aloud state is now reflected on the FAB itself (label becomes
+  "停止", pulse animation active), not just on inline chips.
+
 ## [0.2.0] - 2026-07-19
 
 Adds an opt-in **Privacy Mask** for demo and screen-sharing scenarios.
