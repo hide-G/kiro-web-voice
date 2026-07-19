@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kiro Web Voice</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="kwv-popup">
+      <header class="kwv-popup__header">
+        <div class="kwv-popup__brand">
+          <span class="kwv-popup__dot" aria-hidden="true"></span>
+          <span class="kwv-popup__title">Kiro Web Voice</span>
+          <span class="kwv-popup__badge">PoC</span>
+        </div>
+        <p class="kwv-popup__subtitle">Push-to-talk と任意の読み上げ</p>
+      </header>
+
+      <section class="kwv-card" aria-labelledby="lbl-output-mode">
+        <div class="kwv-card__title" id="lbl-output-mode">出力モード</div>
+        <div class="kwv-seg" role="radiogroup" aria-labelledby="lbl-output-mode">
+          <button type="button" class="kwv-seg__btn" data-mode="display_only" role="radio" aria-checked="false">
+            表示のみ
+          </button>
+          <button type="button" class="kwv-seg__btn" data-mode="manual_read" role="radio" aria-checked="false">
+            手動読み上げ
+          </button>
+          <button type="button" class="kwv-seg__btn" data-mode="auto_read" role="radio" aria-checked="false">
+            自動読み上げ
+          </button>
+        </div>
+        <p class="kwv-card__hint">自動読み上げは実験的です。コードブロックは既定で読み上げません。</p>
+      </section>
+
+      <section class="kwv-card" aria-labelledby="lbl-input">
+        <div class="kwv-card__title" id="lbl-input">音声入力</div>
+
+        <div class="kwv-row">
+          <label class="kwv-row__label" for="lang">言語</label>
+          <select id="lang" class="kwv-select">
+            <option value="ja-JP">日本語 (ja-JP)</option>
+            <option value="en-US">English (en-US)</option>
+            <option value="en-GB">English (en-GB)</option>
+            <option value="ko-KR">한국어 (ko-KR)</option>
+            <option value="zh-CN">简体中文 (zh-CN)</option>
+          </select>
+        </div>
+
+        <div class="kwv-row">
+          <div class="kwv-row__label">認識中の候補を表示</div>
+          <label class="kwv-toggle">
+            <input type="checkbox" id="interim" />
+            <span class="kwv-toggle__track" aria-hidden="true"><span class="kwv-toggle__thumb"></span></span>
+          </label>
+        </div>
+
+        <div class="kwv-row">
+          <div class="kwv-row__label">
+            <span>挿入時に自動送信</span>
+            <span class="kwv-row__hint">安全のため既定はオフです</span>
+          </div>
+          <label class="kwv-toggle">
+            <input type="checkbox" id="autoSubmit" />
+            <span class="kwv-toggle__track" aria-hidden="true"><span class="kwv-toggle__thumb"></span></span>
+          </label>
+        </div>
+      </section>
+
+      <section class="kwv-card" aria-labelledby="lbl-tts">
+        <div class="kwv-card__title" id="lbl-tts">読み上げ</div>
+
+        <div class="kwv-row">
+          <label class="kwv-row__label" for="voice">音声</label>
+          <select id="voice" class="kwv-select">
+            <option value="">システム標準</option>
+          </select>
+        </div>
+
+        <div class="kwv-row">
+          <label class="kwv-row__label" for="rate">速度</label>
+          <input type="range" id="rate" min="0.5" max="1.8" step="0.05" class="kwv-slider" />
+          <span class="kwv-row__value" id="rateValue">1.00</span>
+        </div>
+
+        <div class="kwv-row">
+          <div class="kwv-row__label">
+            <span>コードブロックを読み上げない</span>
+            <span class="kwv-row__hint">推奨</span>
+          </div>
+          <label class="kwv-toggle">
+            <input type="checkbox" id="skipCode" />
+            <span class="kwv-toggle__track" aria-hidden="true"><span class="kwv-toggle__thumb"></span></span>
+          </label>
+        </div>
+
+        <div class="kwv-row">
+          <button type="button" id="testTts" class="kwv-btn kwv-btn--ghost">読み上げをテスト</button>
+        </div>
+      </section>
+
+      <footer class="kwv-popup__footer">
+        <span>Alt+K で開始／停止・Alt+Shift+K で最新回答を読み上げ</span>
+      </footer>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
