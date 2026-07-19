@@ -54,8 +54,17 @@
     settings: { ...DEFAULT_SETTINGS },
     recognition: null,
     listening: false,
+    // recognizingSession is the *user's* intent to keep listening.
+    // It stays true across the browser's automatic onend events so we can
+    // transparently restart the recognizer (Chrome ends the session after
+    // ~60s regardless of `continuous`).
+    recognizingSession: false,
     finalTranscript: "",
     interimTranscript: "",
+    // Most-recently-focused input-like element in the light DOM.
+    // Used as the primary target for insertion because our own UI steals
+    // focus by the time the user clicks "Insert".
+    lastFocusedInput: null,
     lastReadMessageId: null,
     speakingChip: null,
   };
@@ -117,72 +126,158 @@
   // We deliberately avoid depending on class names.
   // ------------------------------------------------------------------
 
-  function findComposer() {
-    // Priority 1: an obvious contenteditable prompt area.
-    const editable = document.querySelector(
-      '[contenteditable="true"][role="textbox"], [contenteditable="true"][aria-label]'
-    );
-    if (editable) return editable;
+  // Predicates -------------------------------------------------------
 
-    // Priority 2: the last visible textarea on the page (chat composer is
-    // conventionally at the bottom).
-    const textareas = Array.from(document.querySelectorAll("textarea"))
-      .filter((t) => t.offsetParent !== null && !t.disabled && !t.readOnly);
-    if (textareas.length) return textareas[textareas.length - 1];
-
-    // Priority 3: any text input that mentions Kiro / Ask in its label.
-    const candidates = Array.from(
-      document.querySelectorAll('input[type="text"], [role="textbox"]')
-    );
-    return (
-      candidates.find((n) => {
-        const label = (n.getAttribute("aria-label") || n.getAttribute("placeholder") || "").toLowerCase();
-        return /kiro|ask|message|prompt|chat/.test(label);
-      }) || null
-    );
-  }
-
-  function nativeSetValue(input, value) {
-    const proto =
-      input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype :
-      input instanceof HTMLInputElement ? HTMLInputElement.prototype :
-      null;
-    if (proto) {
-      const desc = Object.getOwnPropertyDescriptor(proto, "value");
-      desc?.set?.call(input, value);
-    } else if (input.isContentEditable) {
-      input.textContent = value;
+  function isInputLike(node) {
+    if (!node || node.nodeType !== 1 || !node.tagName) return false;
+    const tag = node.tagName;
+    if (tag === "TEXTAREA") return true;
+    if (tag === "INPUT") {
+      const type = (node.getAttribute("type") || "text").toLowerCase();
+      return ["text", "search", "url", "email", ""].includes(type);
     }
+    return node.isContentEditable === true;
   }
+
+  function isVisible(node) {
+    if (!node || !node.getBoundingClientRect) return false;
+    if (node.offsetParent === null && node.tagName !== "HTML" && !node.isContentEditable) return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width >= 10 && rect.height >= 10;
+  }
+
+  function isPartOfOurShadow(node) {
+    // The extension's UI lives inside a Shadow DOM whose host has id="kwv-host".
+    // In "open" mode, focusin events retarget across the boundary — but if we
+    // walk up the ancestor chain we may still cross into our own tree.
+    let n = node;
+    while (n) {
+      if (n.id === "kwv-host") return true;
+      const root = n.getRootNode?.();
+      if (root instanceof ShadowRoot) {
+        if (root.host && root.host.id === "kwv-host") return true;
+        n = root.host;
+      } else {
+        n = n.parentNode;
+      }
+    }
+    return false;
+  }
+
+  // Focus tracking ---------------------------------------------------
+  // Record the last light-DOM input the user interacted with. This becomes
+  // the primary insertion target because the FAB/sheet steal focus by the
+  // time the user commits.
+
+  document.addEventListener(
+    "focusin",
+    (event) => {
+      const target = event.target;
+      if (!target || target === document.body) return;
+      if (isPartOfOurShadow(target)) return;
+      if (!isInputLike(target)) return;
+      state.lastFocusedInput = target;
+      log("tracked composer candidate", target);
+    },
+    true
+  );
+
+  // Composer adapter -------------------------------------------------
+
+  function findComposer() {
+    // 1. Most reliable: the last input-like element that received focus.
+    const remembered = state.lastFocusedInput;
+    if (
+      remembered &&
+      document.body.contains(remembered) &&
+      isInputLike(remembered) &&
+      isVisible(remembered) &&
+      !remembered.disabled &&
+      !remembered.readOnly
+    ) {
+      return remembered;
+    }
+
+    // 2. Semantic hints via data-testid / data-slot / aria (framework-agnostic).
+    const hintSelectors = [
+      '[data-testid*="composer" i]',
+      '[data-testid*="prompt" i]',
+      '[data-testid*="chat-input" i]',
+      '[data-testid*="message-input" i]',
+      '[data-slot*="composer" i]',
+      '[data-slot*="input" i]',
+      '[aria-label*="message" i][contenteditable="true"]',
+      '[aria-label*="prompt" i][contenteditable="true"]',
+      '[aria-label*="ask" i][contenteditable="true"]',
+      '[aria-label*="kiro" i][contenteditable="true"]',
+    ];
+    for (const sel of hintSelectors) {
+      const hits = Array.from(document.querySelectorAll(sel)).filter(isVisible);
+      const usable = hits.find(isInputLike);
+      if (usable) return usable;
+    }
+
+    // 3. Known rich-text editor markers used by popular frameworks.
+    const editorSelectors = [
+      '[contenteditable="true"][data-lexical-editor]',
+      '[contenteditable="true"][data-slate-editor]',
+      '.ProseMirror[contenteditable="true"]',
+      '[contenteditable="true"][role="textbox"]',
+      '[contenteditable="true"][aria-label]',
+    ];
+    for (const sel of editorSelectors) {
+      const hits = Array.from(document.querySelectorAll(sel)).filter(isVisible);
+      if (hits.length) return hits[hits.length - 1];
+    }
+
+    // 4. Any usable textarea, preferring one positioned near the bottom.
+    const textareas = Array.from(document.querySelectorAll("textarea"))
+      .filter((t) => !t.disabled && !t.readOnly)
+      .filter(isVisible)
+      .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+    if (textareas.length) return textareas[0];
+
+    // 5. Any visible contenteditable, again preferring the bottom-most.
+    const editables = Array.from(document.querySelectorAll('[contenteditable="true"]'))
+      .filter(isVisible)
+      .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+    if (editables.length) return editables[0];
+
+    // 6. Input[type=text] with a helpful label.
+    const inputs = Array.from(
+      document.querySelectorAll('input[type="text"], input[type="search"], [role="textbox"]')
+    ).filter(isVisible);
+    const labelled = inputs.find((n) => {
+      const label = (
+        n.getAttribute("aria-label") ||
+        n.getAttribute("placeholder") ||
+        n.getAttribute("title") ||
+        ""
+      ).toLowerCase();
+      return /kiro|ask|message|prompt|chat|type here/.test(label);
+    });
+    if (labelled) return labelled;
+
+    return null;
+  }
+
+  // Insertion --------------------------------------------------------
 
   function insertIntoComposer(text, { submit = false } = {}) {
     const composer = findComposer();
     if (!composer) {
-      showToast("Kiroの入力欄が見つかりませんでした。テキストをコピーしました。");
-      navigator.clipboard?.writeText(text).catch(() => {});
+      log("no composer found; falling back to clipboard");
+      copyToClipboardWithToast(text);
       return false;
     }
-    composer.focus();
-
-    if (composer.isContentEditable) {
-      // Insert as plain text; preserves the app's own paste handling.
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      const range = document.createRange();
-      range.selectNodeContents(composer);
-      range.collapse(false);
-      sel?.addRange(range);
-      document.execCommand("insertText", false, text);
-    } else {
-      const existing = composer.value ?? "";
-      const next = existing ? `${existing}${existing.endsWith("\n") ? "" : " "}${text}` : text;
-      nativeSetValue(composer, next);
-      // React and similar frameworks listen on 'input'.
-      composer.dispatchEvent(new Event("input", { bubbles: true }));
+    log("inserting into composer", composer);
+    const ok = insertText(composer, text);
+    if (!ok) {
+      log("insertion failed on target; falling back to clipboard");
+      copyToClipboardWithToast(text);
+      return false;
     }
-
     if (submit) {
-      // Only fired when user explicitly opts in — see UI below.
       composer.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "Enter",
@@ -193,6 +288,143 @@
       );
     }
     return true;
+  }
+
+  function insertText(target, text) {
+    try {
+      target.focus({ preventScroll: false });
+    } catch {
+      /* focus() may throw on some contenteditable elements; ignore */
+    }
+    if (target.isContentEditable) {
+      return insertIntoContentEditable(target, text);
+    }
+    if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") {
+      return insertIntoTextInput(target, text);
+    }
+    return false;
+  }
+
+  function insertIntoContentEditable(target, text) {
+    const sel = window.getSelection();
+    if (!sel) return false;
+
+    // Place the caret at the end of the editor if the selection is not
+    // already inside the target.
+    const inTarget = sel.rangeCount > 0 && target.contains(sel.anchorNode);
+    if (!inTarget) {
+      sel.removeAllRanges();
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      range.collapse(false);
+      sel.addRange(range);
+    }
+    const before = target.textContent || "";
+
+    // Strategy A: beforeinput event, which Lexical / Slate / ProseMirror
+    // handle natively as a text-insertion request.
+    try {
+      const beforeInput = new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        inputType: "insertText",
+        data: text,
+      });
+      target.dispatchEvent(beforeInput);
+      if ((target.textContent || "").length > before.length) return true;
+    } catch {
+      /* fall through */
+    }
+
+    // Strategy B: legacy execCommand — widely honoured across editors.
+    try {
+      if (document.execCommand && document.execCommand("insertText", false, text)) {
+        if ((target.textContent || "").length > before.length) return true;
+      }
+    } catch {
+      /* fall through */
+    }
+
+    // Strategy C: manual DOM insertion + input event.
+    try {
+      const range = sel.rangeCount > 0 ? sel.getRangeAt(0) : (() => {
+        const r = document.createRange();
+        r.selectNodeContents(target);
+        r.collapse(false);
+        return r;
+      })();
+      range.deleteContents();
+      const node = document.createTextNode(text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.setEndAfter(node);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      target.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          cancelable: false,
+          composed: true,
+          inputType: "insertText",
+          data: text,
+        })
+      );
+      return (target.textContent || "").length > before.length;
+    } catch (e) {
+      log("contenteditable strategies exhausted", e);
+      return false;
+    }
+  }
+
+  function insertIntoTextInput(target, text) {
+    try {
+      const proto =
+        target instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+      if (!setter) return false;
+
+      const existing = target.value || "";
+      const separator = existing && !/\s$/.test(existing) ? " " : "";
+      const next = existing + separator + text;
+
+      // React tracks _valueTracker on the DOM node; using the native setter
+      // bypasses its "same value, don't re-fire" optimisation.
+      setter.call(target, next);
+      target.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          cancelable: false,
+          composed: true,
+          inputType: "insertText",
+          data: text,
+        })
+      );
+      // Some libraries also listen for 'change'.
+      target.dispatchEvent(new Event("change", { bubbles: true }));
+      return target.value === next;
+    } catch (e) {
+      log("text input insertion failed", e);
+      return false;
+    }
+  }
+
+  async function copyToClipboardWithToast(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast(
+        "入力欄が特定できませんでした。文字起こしをコピーしましたので、貼り付けてください（Ctrl+V / ⌘V）。",
+        5500
+      );
+    } catch (e) {
+      log("clipboard write failed", e);
+      showToast(
+        `貼り付けに失敗しました。書き起こし: ${text.slice(0, 60)}${text.length > 60 ? "…" : ""}`,
+        6000
+      );
+    }
   }
 
   // ------------------------------------------------------------------
@@ -228,6 +460,16 @@
   // Speech recognition
   // ------------------------------------------------------------------
 
+  // Recognition sessions in Chrome end automatically after ~60s regardless
+  // of `continuous`. We treat "the user wants to keep listening" as its own
+  // state and transparently restart the recognizer as many times as needed.
+  const PERMANENT_ERRORS = new Set([
+    "not-allowed",
+    "service-not-allowed",
+    "audio-capture",
+    "language-not-supported",
+  ]);
+
   function ensureRecognition() {
     if (state.recognition) return state.recognition;
     const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -238,7 +480,7 @@
     const rec = new Ctor();
     rec.lang = state.settings.lang || "ja-JP";
     rec.interimResults = !!state.settings.interim;
-    rec.continuous = false;
+    rec.continuous = true;
     rec.maxAlternatives = 1;
 
     rec.onstart = () => {
@@ -254,33 +496,63 @@
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const chunk = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalText = (finalText ? `${finalText} ` : "") + chunk.trim();
+          const trimmed = chunk.trim();
+          if (trimmed) {
+            finalText = finalText ? `${finalText} ${trimmed}` : trimmed;
+          }
         } else {
           interim += chunk;
         }
       }
-      state.finalTranscript = finalText.trim();
+      state.finalTranscript = finalText;
       state.interimTranscript = interim.trim();
       renderTranscript();
     };
 
     rec.onerror = (event) => {
       log("recognition error", event.error);
-      const messages = {
-        "not-allowed": "マイクの利用が許可されていません。アドレスバーから許可してください。",
-        "service-not-allowed": "音声認識サービスが利用できません。",
-        "no-speech": "音声が検出できませんでした。もう一度お試しください。",
-        "audio-capture": "マイクが見つかりませんでした。",
-        "network": "ネットワークエラーで認識できませんでした。",
-      };
-      showToast(messages[event.error] || `音声認識に失敗しました: ${event.error}`);
-      stopListening();
+      if (PERMANENT_ERRORS.has(event.error)) {
+        const messages = {
+          "not-allowed": "マイクの利用が許可されていません。アドレスバーから許可してください。",
+          "service-not-allowed": "音声認識サービスが利用できません。",
+          "audio-capture": "マイクが見つかりませんでした。",
+          "language-not-supported": "この言語は音声認識に対応していません。",
+        };
+        showToast(messages[event.error] || `音声認識に失敗しました: ${event.error}`);
+        stopListening();
+        return;
+      }
+      // Transient errors (no-speech, aborted, network) — let onend restart.
+      if (event.error === "network") {
+        showToast("ネットワークエラーで一時的に失敗しました。再試行します。");
+      }
     };
 
     rec.onend = () => {
+      // If the user still wants to be recording, transparently restart the
+      // recognizer. We keep a small delay so a fresh session can be created.
+      if (state.recognizingSession) {
+        setTimeout(() => {
+          if (!state.recognizingSession) return;
+          try {
+            rec.start();
+          } catch (err) {
+            log("auto-restart failed, ending session", err);
+            state.recognizingSession = false;
+            state.listening = false;
+            setFabListening(false);
+            updateSheetStatus(
+              state.finalTranscript ? "確認して挿入してください" : "音声が検出されませんでした"
+            );
+          }
+        }, 120);
+        return;
+      }
       state.listening = false;
       setFabListening(false);
-      updateSheetStatus(state.finalTranscript ? "確認して挿入してください" : "音声が検出されませんでした");
+      updateSheetStatus(
+        state.finalTranscript ? "確認して挿入してください" : "音声が検出されませんでした"
+      );
     };
 
     state.recognition = rec;
@@ -291,21 +563,39 @@
     if (state.listening) return;
     const rec = ensureRecognition();
     if (!rec) return;
+    // Snapshot the currently focused input as a strong composer hint before
+    // the FAB steals focus.
+    if (
+      document.activeElement &&
+      isInputLike(document.activeElement) &&
+      !isPartOfOurShadow(document.activeElement)
+    ) {
+      state.lastFocusedInput = document.activeElement;
+    }
     state.finalTranscript = "";
     state.interimTranscript = "";
+    state.recognizingSession = true;
     try {
       rec.lang = state.settings.lang || "ja-JP";
       rec.interimResults = !!state.settings.interim;
+      rec.continuous = true;
       rec.start();
     } catch (err) {
       log("start failed", err);
+      state.recognizingSession = false;
       showToast("音声認識を開始できませんでした。");
     }
   }
 
   function stopListening() {
+    // Signal onend NOT to restart before we call stop().
+    state.recognizingSession = false;
     if (state.recognition && state.listening) {
-      try { state.recognition.stop(); } catch { /* no-op */ }
+      try {
+        state.recognition.stop();
+      } catch {
+        /* no-op */
+      }
     }
     state.listening = false;
     setFabListening(false);
