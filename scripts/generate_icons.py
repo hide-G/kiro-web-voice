@@ -1,13 +1,22 @@
 """Generate the extension's PNG icons.
 
-We render an Apple-style app tile: rounded square with a linear-blue gradient
-(system blue → indigo) and a white microphone glyph. All sizes come from the
-same source SVG so the visuals stay consistent across 16/32/48/128px.
+Design (v0.3.0): a neutral utility icon — dark-charcoal circle with a
+simple white microphone glyph. Explicit choices:
+
+ - Circle, not the iOS-style rounded square, to avoid reading as an
+   Apple app tile.
+ - Flat solid fill, no gradient, no highlight, no drop shadow.
+ - Single monochrome mic glyph (filled), designed to stay legible at
+   16 px.
+ - No brand colours; keep the tone tool-like and neutral.
+ - A muted recording-capable dot at the top-right on larger sizes; it
+   is dropped at 16/24 px so the shape survives sub-pixel rendering.
+
+Sizes: 16, 32, 48, 128, 512.
 """
 from __future__ import annotations
 
 import io
-import os
 from pathlib import Path
 
 import cairosvg
@@ -17,50 +26,49 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "icons"
 OUT.mkdir(parents=True, exist_ok=True)
 
-# 1024px master, then downscale for the extension slots.
 MASTER = 1024
 SIZES = [16, 32, 48, 128, 512]
 
-SVG = f"""<?xml version='1.0' encoding='UTF-8'?>
+# Colours — deliberately tool-like, not iOS system palette.
+BG = "#2A2A2E"       # dark charcoal
+FG = "#F2F2F5"       # near-white with a hint of warmth
+DOT = "#4AC98A"      # muted recording indicator
+
+SVG_LARGE = f"""<?xml version='1.0' encoding='UTF-8'?>
 <svg xmlns='http://www.w3.org/2000/svg' width='{MASTER}' height='{MASTER}' viewBox='0 0 1024 1024'>
-  <defs>
-    <linearGradient id='bg' x1='0' y1='0' x2='0' y2='1'>
-      <stop offset='0%' stop-color='#0A84FF'/>
-      <stop offset='100%' stop-color='#5E5CE6'/>
-    </linearGradient>
-    <radialGradient id='highlight' cx='30%' cy='20%' r='60%'>
-      <stop offset='0%' stop-color='white' stop-opacity='0.28'/>
-      <stop offset='100%' stop-color='white' stop-opacity='0'/>
-    </radialGradient>
-    <filter id='shadow' x='-20%' y='-20%' width='140%' height='140%'>
-      <feDropShadow dx='0' dy='16' stdDeviation='18' flood-opacity='0.20'/>
-    </filter>
-  </defs>
+  <circle cx='512' cy='512' r='488' fill='{BG}'/>
+  <g fill='{FG}' transform='translate(0 -20)'>
+    <rect x='412' y='236' width='200' height='420' rx='100' ry='100'/>
+    <path d='M 292 512
+             a 220 220 0 0 0 440 0
+             l -56 0
+             a 164 164 0 1 1 -328 0 z'/>
+    <rect x='488' y='700' width='48' height='120' rx='24' ry='24'/>
+    <rect x='400' y='792' width='224' height='42' rx='21' ry='21'/>
+  </g>
+  <circle cx='820' cy='230' r='54' fill='{DOT}' opacity='0.9'/>
+</svg>
+"""
 
-  <!-- Rounded tile with system-blue gradient -->
-  <rect x='40' y='40' width='944' height='944' rx='232' ry='232' fill='url(#bg)' filter='url(#shadow)'/>
-  <rect x='40' y='40' width='944' height='944' rx='232' ry='232' fill='url(#highlight)'/>
-
-  <!-- Microphone glyph, centered -->
-  <g fill='white' transform='translate(512 512)'>
-    <!-- Capsule body -->
-    <rect x='-120' y='-260' width='240' height='420' rx='120' ry='120'/>
-    <!-- U-shaped bracket -->
-    <path d='M -240 0
-             a 240 240 0 0 0 480 0
-             l -60 0
+SVG_TINY = f"""<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns='http://www.w3.org/2000/svg' width='{MASTER}' height='{MASTER}' viewBox='0 0 1024 1024'>
+  <circle cx='512' cy='512' r='488' fill='{BG}'/>
+  <g fill='{FG}'>
+    <rect x='388' y='228' width='248' height='452' rx='124' ry='124'/>
+    <path d='M 260 520
+             a 252 252 0 0 0 504 0
+             l -72 0
              a 180 180 0 1 1 -360 0 z'/>
-    <!-- Stem -->
-    <rect x='-24' y='200' width='48' height='120' rx='24' ry='24'/>
-    <!-- Base -->
-    <rect x='-160' y='300' width='320' height='48' rx='24' ry='24'/>
+    <rect x='480' y='720' width='64' height='120' rx='32' ry='32'/>
+    <rect x='372' y='808' width='280' height='60' rx='30' ry='30'/>
   </g>
 </svg>
 """
 
 
 def render(size: int) -> None:
-    png_bytes = cairosvg.svg2png(bytestring=SVG.encode("utf-8"), output_width=size, output_height=size)
+    svg = SVG_TINY if size <= 24 else SVG_LARGE
+    png_bytes = cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=size, output_height=size)
     with Image.open(io.BytesIO(png_bytes)) as im:
         im.save(OUT / f"icon{size}.png", optimize=True)
         print(f"wrote {OUT / f'icon{size}.png'} ({im.size[0]}x{im.size[1]})")

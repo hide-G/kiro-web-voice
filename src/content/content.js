@@ -440,20 +440,117 @@
   }
 
   // ------------------------------------------------------------------
-  // Message extractor — pull the latest agent message text for TTS.
+  // Message extractor — pull text that the user is likely to want to hear.
+  //
+  // Three cascading strategies, in order of decreasing confidence:
+  //   1. The current text selection (user-driven, always trustworthy).
+  //   2. Well-known role / data attributes commonly seen on chat UIs.
+  //   3. A layout heuristic: the largest visible text block sitting just
+  //      above the composer, which is where the newest agent reply lives.
   // ------------------------------------------------------------------
 
+  function extractSelectedText() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const text = (sel.toString() || "").trim();
+    if (!text || text.length < 2) return null;
+    // Ignore selections rooted in our own Shadow DOM.
+    const anchor = sel.anchorNode;
+    const root = anchor?.getRootNode?.();
+    if (root instanceof ShadowRoot && root.host?.id === "kwv-host") return null;
+    return text;
+  }
+
   function extractLatestAgentMessage() {
-    // Prefer semantic roles.
-    const groups = document.querySelectorAll('[role="log"] [role="article"], [data-message-role="assistant"], [data-role="assistant"]');
-    if (groups.length) return sanitiseText(groups[groups.length - 1]);
+    // Known semantic patterns, tried in most-specific → least-specific order.
+    const knownSelectors = [
+      '[role="log"] [role="article"]',
+      '[data-message-role="assistant"]',
+      '[data-role="assistant"]',
+      '[data-message-author-role="assistant"]',
+      'main article',
+      'main [role="article"]',
+    ];
+    for (const sel of knownSelectors) {
+      const nodes = document.querySelectorAll(sel);
+      if (nodes.length) {
+        const text = sanitiseText(nodes[nodes.length - 1]);
+        if (text && text.length > 10) return text;
+      }
+    }
 
-    // Fallback: last article-like container in main.
-    const main = document.querySelector("main") || document.body;
-    const articles = main.querySelectorAll("article, [role='article']");
-    if (articles.length) return sanitiseText(articles[articles.length - 1]);
-
+    // Class-name hints — deliberately loose but with exclusions to avoid
+    // catching the composer or user-message bubbles.
+    const classPatterns = [
+      '[class*="assistant" i]:not([class*="input" i]):not([class*="button" i]):not([class*="composer" i])',
+      '[class*="response" i]:not([class*="input" i]):not([class*="button" i])',
+      '[class*="message" i]:not([class*="user" i]):not([class*="input" i]):not([class*="button" i]):not([class*="composer" i])',
+    ];
+    for (const sel of classPatterns) {
+      try {
+        const nodes = document.querySelectorAll(sel);
+        if (nodes.length) {
+          const text = sanitiseText(nodes[nodes.length - 1]);
+          if (text && text.length > 40) return text;
+        }
+      } catch { /* ignore invalid pseudo-selectors on older browsers */ }
+    }
     return null;
+  }
+
+  function extractHeuristicMessage() {
+    // Layout heuristic: the newest agent reply is the biggest text block
+    // that sits above the composer and near the bottom of the viewport.
+    const composer = findComposer();
+    const composerTop = composer
+      ? composer.getBoundingClientRect().top
+      : window.innerHeight;
+
+    const scope = document.querySelector("main") || document.body;
+    if (!scope) return null;
+
+    const candidates = [];
+    const nodes = scope.querySelectorAll(
+      "p, div, section, article, li, blockquote, [role='article']"
+    );
+    for (const el of nodes) {
+      if (el.closest && el.closest("#kwv-host")) continue;
+      const tag = el.tagName;
+      if (tag === "SCRIPT" || tag === "STYLE" || tag === "BUTTON") continue;
+      if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") continue;
+      if (el.isContentEditable) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top >= composerTop) continue;
+      const text = (el.textContent || "").trim();
+      if (text.length < 40 || text.length > 8000) continue;
+      candidates.push({ el, top: rect.top, len: text.length });
+    }
+    if (!candidates.length) return null;
+
+    // Prefer the block closest to the composer.
+    candidates.sort((a, b) => b.top - a.top);
+
+    // Skip candidates whose descendants cover most of their own text
+    // (i.e. wrappers of the whole chat log rather than a single reply).
+    for (const { el } of candidates) {
+      const own = (el.textContent || "").trim().length;
+      const nested = Array.from(el.querySelectorAll("*"))
+        .filter((n) => candidates.some((c) => c.el === n))
+        .reduce((sum, n) => sum + ((n.textContent || "").trim().length || 0), 0);
+      if (nested > own * 0.8) continue;
+      const text = sanitiseText(el);
+      if (text && text.length > 40) return text;
+    }
+    // Last resort: return the highest-top candidate.
+    return sanitiseText(candidates[0].el);
+  }
+
+  function extractReadTarget() {
+    return (
+      extractSelectedText() ||
+      extractLatestAgentMessage() ||
+      extractHeuristicMessage()
+    );
   }
 
   function sanitiseText(root) {
@@ -463,8 +560,10 @@
       clone.querySelectorAll("pre, code, kbd, samp").forEach((n) => n.remove());
     }
     // Strip our own chips if they were included.
-    clone.querySelectorAll(".kwv-read, .kwv-fab, .kwv-sheet, .kwv-toast").forEach((n) => n.remove());
-    const text = clone.textContent?.replace(/\s+/g, " ").trim() || "";
+    clone
+      .querySelectorAll(".kwv-read, .kwv-fab, .kwv-sheet, .kwv-toast, .kwv-dock")
+      .forEach((n) => n.remove());
+    const text = (clone.textContent || "").replace(/\s+/g, " ").trim();
     return text.length ? text : null;
   }
 
@@ -652,12 +751,14 @@
       chipEl.textContent = "停止";
       state.speakingChip = chipEl;
     }
+    setReadingActive(true);
     utter.onend = utter.onerror = () => {
       if (chipEl) {
         delete chipEl.dataset.speaking;
         chipEl.textContent = "読み上げ";
       }
       state.speakingChip = null;
+      setReadingActive(false);
     };
 
     window.speechSynthesis.speak(utter);
@@ -671,6 +772,7 @@
         chipEl.textContent = "読み上げ";
       }
       state.speakingChip = null;
+      setReadingActive(false);
       return;
     }
     speak(text, chipEl);
@@ -682,7 +784,8 @@
 
   let shadowHost = null;
   let shadowRoot = null;
-  let fab = null;
+  let fab = null;           // "話す" FAB — voice input
+  let readFab = null;       // "読む" FAB — read-aloud
   let sheet = null;
   let transcriptField = null;
   let sheetStatus = null;
@@ -694,7 +797,6 @@
     document.documentElement.appendChild(shadowHost);
     shadowRoot = shadowHost.attachShadow({ mode: "open" });
 
-    // Load the extension's stylesheet inside the shadow root.
     const link = el("link", {
       rel: "stylesheet",
       href: chrome.runtime.getURL("src/content/content.css"),
@@ -704,31 +806,90 @@
     const root = el("div", { class: "kwv-root" });
     shadowRoot.appendChild(root);
 
-    fab = buildFab();
-    root.appendChild(fab);
+    // Dock holds both FABs side by side, keeping the layout symmetric
+    // (input on the right, output on the left).
+    const dock = el("div", { class: "kwv-dock" });
+    readFab = buildReadFab();
+    fab = buildVoiceFab();
+    dock.append(readFab, fab);
+    root.appendChild(dock);
     root.appendChild(buildSheet());
   }
 
-  function buildFab() {
+  function _wirePress(btn) {
+    btn.addEventListener("pointerdown", () => { btn.dataset.pressed = "true"; });
+    btn.addEventListener("pointerup", () => { delete btn.dataset.pressed; });
+    btn.addEventListener("pointercancel", () => { delete btn.dataset.pressed; });
+    btn.addEventListener("pointerleave", () => { delete btn.dataset.pressed; });
+  }
+
+  function buildVoiceFab() {
     const dot = el("span", { class: "kwv-fab__dot" });
     const label = el("span", { class: "kwv-fab__label" }, "話す");
     const btn = el(
       "button",
       {
-        class: "kwv-fab",
+        class: "kwv-fab kwv-fab--voice",
         type: "button",
         "aria-label": "音声入力を開始（Alt+K）",
         title: "音声入力を開始（Alt+K）",
       },
       [dot, label]
     );
-    // Pointer-down feedback and click to toggle.
-    btn.addEventListener("pointerdown", () => { btn.dataset.pressed = "true"; });
-    btn.addEventListener("pointerup", () => { delete btn.dataset.pressed; });
-    btn.addEventListener("pointercancel", () => { delete btn.dataset.pressed; });
-    btn.addEventListener("pointerleave", () => { delete btn.dataset.pressed; });
+    _wirePress(btn);
     btn.addEventListener("click", () => toggleListening());
     return btn;
+  }
+
+  function buildReadFab() {
+    const dot = el("span", { class: "kwv-fab__dot" });
+    const label = el("span", { class: "kwv-fab__label" }, "読む");
+    const btn = el(
+      "button",
+      {
+        class: "kwv-fab kwv-fab--read",
+        type: "button",
+        "aria-label": "選択テキストまたは最新回答を読み上げ（Alt+Shift+K）",
+        title: "選択テキストまたは最新回答を読み上げ（Alt+Shift+K）",
+      },
+      [dot, label]
+    );
+    _wirePress(btn);
+    btn.addEventListener("click", () => readNow());
+    return btn;
+  }
+
+  function setReadingActive(on) {
+    if (!readFab) return;
+    if (on) {
+      readFab.dataset.speaking = "true";
+      const label = readFab.querySelector(".kwv-fab__label");
+      if (label) label.textContent = "停止";
+    } else {
+      delete readFab.dataset.speaking;
+      const label = readFab.querySelector(".kwv-fab__label");
+      if (label) label.textContent = "読む";
+    }
+  }
+
+  // Called by the read FAB and by Alt+Shift+K. If we're currently speaking,
+  // stop. Otherwise, resolve the best available text and speak it.
+  function readNow() {
+    if (window.speechSynthesis?.speaking || readFab?.dataset.speaking) {
+      window.speechSynthesis?.cancel();
+      setReadingActive(false);
+      state.speakingChip = null;
+      return;
+    }
+    const text = extractReadTarget();
+    if (!text) {
+      showToast(
+        "読み上げ対象が見つかりませんでした。テキストを選択して再度お試しください。",
+        3600
+      );
+      return;
+    }
+    speak(text);
   }
 
   function buildSheet() {
@@ -1150,9 +1311,7 @@
     if (!message?.type) return;
     if (message.type === MSG.COMMAND_TOGGLE) toggleListening();
     if (message.type === MSG.COMMAND_READ) {
-      const text = extractLatestAgentMessage();
-      if (text) speak(text);
-      else showToast("読み上げ対象のメッセージが見つかりませんでした。");
+      readNow();
     }
   });
 
