@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-19
+
+Adds an opt-in **Privacy Mask** for demo and screen-sharing scenarios.
+
+### Added
+- **Privacy Mask.** A new toggle group in the popup that visually hides
+  sensitive text on `app.kiro.dev` behind a soft blur. Hover reveals the
+  masked content, so the UI remains usable.
+  - **Emails.** Any string matching an email pattern is wrapped in a
+    `<span data-kwv-mask="email">` and blurred inline. Uses a `TreeWalker`
+    that skips scripts, styles, inputs, contenteditable, and the
+    extension's own Shadow DOM.
+  - **Recent (sidebar).** Text nodes whose whole content matches
+    `Recent` / `Recents` / `Recently` / `最近` / `履歴` become anchors.
+    The nearest following list container (`ul` / `ol` / `[role=list]`)
+    is masked as a block via `[data-kwv-mask="section"]`.
+  - Master toggle plus per-category sub-toggles. Sub-toggles are dimmed
+    and inert while the master is off.
+  - Dynamic content is handled by the existing `MutationObserver` via a
+    debounced re-scan (300 ms), so newly loaded messages and sidebar
+    items are picked up automatically.
+- **Reduced-transparency and high-contrast fallbacks.** Instead of blur
+  (which can be fatiguing at low vision), the mask renders as a diagonal
+  hatch redaction with fully transparent text. Reveal-on-hover still
+  works.
+
+### Notes
+- The mask is a **visual affordance, not a security feature.** The masked
+  text is still present in the DOM and is visible to screen readers, view-
+  source, extensions, and copy operations. This is intentional so the UI
+  stays accessible, but it means the feature is unsuitable for hiding
+  data from an adversary.
+
 ## [0.1.1] - 2026-07-19
 
 Reliability fixes based on the first live-browser trial on `app.kiro.dev`.

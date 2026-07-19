@@ -344,3 +344,92 @@
     -webkit-backdrop-filter: none;
   }
 }
+
+
+/* ---------- Privacy mask (v0.2.0) ---------- *
+ * Blur-based redaction of sensitive text.
+ * - Inline `[data-kwv-mask="email"]` wraps individual email addresses.
+ * - Block `[data-kwv-mask="section"]` wraps a container such as the
+ *   "Recent" list on the sidebar.
+ *
+ * Reveal-on-hover keeps content usable while masked. Reduced-motion
+ * strips the transition; reduced-transparency and high-contrast users
+ * get a solid diagonal-hatch redaction instead of a blur.
+ * -------------------------------------------- */
+
+[data-kwv-mask="email"],
+[data-kwv-mask="section"] {
+  cursor: help;
+  border-radius: 4px;
+  transition: filter 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              background-color 180ms ease-out,
+              color 180ms ease-out;
+}
+
+[data-kwv-mask="email"] {
+  display: inline-block;
+  filter: blur(6px);
+  padding: 0 2px;
+}
+
+[data-kwv-mask="section"] {
+  filter: blur(8px);
+  position: relative;
+}
+
+[data-kwv-mask="email"]:hover,
+[data-kwv-mask="section"]:hover,
+[data-kwv-mask="email"]:focus-within,
+[data-kwv-mask="section"]:focus-within {
+  filter: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-kwv-mask="email"],
+  [data-kwv-mask="section"] {
+    transition: none;
+  }
+}
+
+/* When the user asks for less transparency (or higher contrast), replace
+ * the blur — which can be fatiguing at low vision — with a solid diagonal
+ * hatch that reads as "redacted" and still reveals on hover.
+ */
+@media (prefers-reduced-transparency: reduce) {
+  [data-kwv-mask="email"],
+  [data-kwv-mask="section"] {
+    filter: none;
+    color: transparent;
+    background:
+      repeating-linear-gradient(
+        -45deg,
+        rgba(120, 120, 128, 0.28),
+        rgba(120, 120, 128, 0.28) 6px,
+        rgba(120, 120, 128, 0.42) 6px,
+        rgba(120, 120, 128, 0.42) 12px
+      );
+  }
+  [data-kwv-mask="email"]:hover,
+  [data-kwv-mask="section"]:hover,
+  [data-kwv-mask="email"]:focus-within,
+  [data-kwv-mask="section"]:focus-within {
+    background: transparent;
+    color: inherit;
+  }
+}
+
+@media (prefers-contrast: more) {
+  [data-kwv-mask="email"],
+  [data-kwv-mask="section"] {
+    filter: none;
+    color: transparent;
+    background: rgba(120, 120, 128, 0.55);
+    outline: 1px solid currentColor;
+  }
+  [data-kwv-mask="email"]:hover,
+  [data-kwv-mask="section"]:hover {
+    background: transparent;
+    color: inherit;
+    outline: none;
+  }
+}

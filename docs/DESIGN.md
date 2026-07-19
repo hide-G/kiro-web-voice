@@ -77,3 +77,40 @@ UI の意思決定を、参考にした [Apple Design skill](https://github.com/
 | Simplicity | ポップアップ 1 画面に完結。上級設定は将来別画面に隔離。 |
 | Craft | すべてのマージン・角丸・イージングを Apple の値を参考に統一。系統的なスペーシング。 |
 | Delight | 素材の登場、色のグラデーション、赤の呼吸ドットで「反応してくれる」感触を作る。 |
+
+
+
+## 18. Privacy mask (v0.2.0)
+
+デモ・配信・スクリーンショット用途で個人情報を視覚的に隠す機能。**セキュリティ機能ではなく、あくまで視覚的な目隠し** です。
+
+### 3-3. 直接操作 との整合
+
+- ぼかしはインライン `[data-kwv-mask="email"]` またはブロック `[data-kwv-mask="section"]` に適用。要素そのものは操作可能 (クリック・タブ移動が通る) なので、直接操作の原則を壊さない。
+- ホバーで即解除、離れると再びぼやける。応答性は `transition: filter 180ms cubic-bezier(0.2, 0.8, 0.2, 1)`。
+
+### 12. 素材 との整合
+
+- ぼかしは「素材が上に載っている」比喩ではなく「テキストが自ら霞んでいる」比喩。半透明の追加レイヤーを重ねないので、既存の半透明ツールバーやシートと視覚的に競合しない。
+
+### 14. アクセシビリティ
+
+- `prefers-reduced-motion: reduce`: ホバー時の解除にかかる transition を除去。
+- `prefers-reduced-transparency: reduce`: ぼかしをやめて **対角ストライプの redaction** に切替。テキスト色は `transparent`、背景は反復リニアグラデーション。
+- `prefers-contrast: more`: 同様にストライプ + 実線 outline で「隠されている」ことを明示。
+
+### 16. 基礎原則との対応
+
+| 原則 | 反映 |
+| --- | --- |
+| Responsibility | セキュリティ機能ではないことを README/CHANGELOG/カード下ヒントで明記。誤解による過信を避ける。 |
+| Agency | 既定 OFF。ユーザーが明示的にオンにする必要がある。個別カテゴリも独立して制御可能。 |
+| Simplicity | マスターと 2 個のサブトグルのみ。詳細設定は将来別画面に隔離。 |
+| Craft | 対象を text node に限定し、`SCRIPT` / `STYLE` / `TEXTAREA` / `INPUT` / `contenteditable` / 自身の Shadow DOM を除外。誤マスクによる副作用を最小化。 |
+
+### 実装の要点
+
+- 走査は `document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, ...)` で text node のみを対象化。要素ツリー全体を舐めないので低コスト。
+- 動的コンテンツは既存の `MutationObserver` が `schedulePrivacyScan(300)` を呼び、300 ms デバウンスで追加スキャン。
+- トグル OFF 化: `removeMaskedEmails()` は `<span>` を unwrap した後 `parent.normalize()` で text node を結合。`removeMaskedSections()` は属性とクラスを外すだけ。
+- 無限ループ回避: 走査時の `acceptNode` で「既にマスク済みの子孫」を `FILTER_REJECT` する。したがって MutationObserver の再走査でも同じ email を二重に包まない。

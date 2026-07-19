@@ -270,3 +270,14 @@ body {
 @media (prefers-contrast: more) {
   .kwv-card, .kwv-select, .kwv-btn { border-color: currentColor; }
 }
+
+
+/* Sub-toggles inside the Privacy card depend on the master switch.
+ * When the master is off, they are visually dimmed and inert.
+ */
+.kwv-row[data-depends-on][data-inactive="true"] {
+  opacity: 0.42;
+  pointer-events: none;
+  filter: saturate(0.6);
+  transition: opacity 200ms ease-out, filter 200ms ease-out;
+}
